@@ -27,7 +27,7 @@ app.disable('x-powered-by');
 
 // Xác thực domain với Zalo: dán mã Zalo cấp vào ZALO_VERIFY_CODE.
 const VERIFY = process.env.ZALO_VERIFY_CODE || '';
-const verifyHtml = `<!doctype html><html><head><meta charset="utf-8"><meta property="zalo-platform-site-verification" content="${VERIFY}" /></head><body>HADO Zalo OA connector đang chạy.</body></html>`;
+const verifyHtml = `<!doctype html><html><head><meta charset="utf-8"><meta name="zalo-platform-site-verification" content="${VERIFY}" /></head><body>HADO Zalo OA connector đang chạy.</body></html>`;
 app.get('/', (_req, res) => res.type('html').send(verifyHtml));
 if (VERIFY) app.get(`/zalo_verifier${VERIFY}.html`, (_req, res) => res.type('html').send(verifyHtml));
 app.get('/health', async (_req, res) => res.json({ ok: true, store: storeKind, zalo: await tokenStatus() }));
