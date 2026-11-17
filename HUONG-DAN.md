@@ -130,3 +130,19 @@ zalo-connector/
 ├── .env.example
 └── Dockerfile
 ```
+
+---
+
+## Phụ lục: Kết nối nick Zalo cá nhân (không cần OA)
+
+> **Rủi ro:** dùng thư viện không chính thức `zca-js`, vi phạm điều khoản Zalo. Nick có thể bị khoá. Chủ shop đã chọn chấp nhận rủi ro này (17/11/2026).
+
+1. Mở `https://<url>/canhan?key=<ADMIN_KEY>` (ADMIN_KEY copy ở tab Environment trên Render).
+2. Bấm **Tạo mã QR đăng nhập**. Trên điện thoại, mở Zalo của nick muốn kết nối, bấm biểu tượng QR, quét mã, rồi bấm **Đăng nhập**.
+3. Trang báo **Đã kết nối ✅** là xong. Phiên đăng nhập được mã hoá và lưu trên Upstash, server khởi động lại sẽ tự đăng nhập lại.
+4. Trong Claude dùng các tool `zcn_*`: `zcn_danh_sach_hoi_thoai`, `zcn_doc_hoi_thoai`, `zcn_tin_moi`, `zcn_thong_tin_khach`, `zcn_lich_su_nhom`, `zcn_gui_tin` (chỉ xem trước khi `ZALO_SEND_ENABLED=false`).
+
+Giới hạn:
+- Zalo không cho tải toàn bộ lịch sử chat 1-1. Agent chỉ thấy tin nhận được từ lúc kết nối, cộng phần Zalo gửi bù khi vừa kết nối.
+- **Không mở Zalo Web (chat.zalo.me) cùng nick.** Zalo chỉ cho 1 phiên web, mở Zalo Web sẽ đá agent ra. App Zalo trên điện thoại và Zalo PC vẫn dùng bình thường.
+- Gửi tin: luôn để chủ shop duyệt từng tin, không gửi hàng loạt (dễ bị Zalo khoá).

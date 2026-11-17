@@ -48,3 +48,30 @@ export async function setJSON(key, value) {
   await fs.writeFile(p + '.tmp', s, { mode: 0o600 });
   await fs.rename(p + '.tmp', p);
 }
+
+// Danh sách (mới nhất đứng đầu), giới hạn max phần tử.
+export async function pushList(key, item, max) {
+  const s = JSON.stringify(item);
+  if (storeKind === 'upstash') {
+    await upstash('LPUSH', PREFIX + key, s);
+    await upstash('LTRIM', PREFIX + key, 0, max - 1);
+    return;
+  }
+  const list = (await getJSON(key)) || [];
+  list.unshift(item);
+  if (list.length > max) list.length = max;
+  await setJSON(key, list);
+}
+
+export async function getList(key, count) {
+  if (storeKind === 'upstash') {
+    const r = (await upstash('LRANGE', PREFIX + key, 0, count - 1)) || [];
+    return r.map((s) => JSON.parse(s));
+  }
+  return ((await getJSON(key)) || []).slice(0, count);
+}
+
+export async function delKey(key) {
+  if (storeKind === 'upstash') { await upstash('DEL', PREFIX + key); return; }
+  await setJSON(key, null);
+}

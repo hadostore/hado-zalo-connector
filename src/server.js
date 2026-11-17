@@ -7,6 +7,8 @@ import { registerTools } from './tools.js';
 import { buildAuthUrl, exchangeCode, tokenStatus, verifyWebhook } from './zalo.js';
 import { addEvent } from './events.js';
 import { storeKind } from './store.js';
+import { registerPersonalTools } from './personalTools.js';
+import { startQRLogin, restoreSession, logout, personalState, isLoggedIn } from './personal.js';
 
 const required = ['ZALO_APP_ID', 'ZALO_APP_SECRET', 'PUBLIC_BASE_URL', 'MCP_SECRET', 'ADMIN_KEY'];
 const missing = required.filter((k) => !process.env[k]);
@@ -30,7 +32,46 @@ const VERIFY = process.env.ZALO_VERIFY_CODE || '';
 const verifyHtml = `<!doctype html><html><head><meta charset="utf-8"><meta name="zalo-platform-site-verification" content="${VERIFY}" /></head><body>HADO Zalo OA connector đang chạy.</body></html>`;
 app.get('/', (_req, res) => res.type('html').send(verifyHtml));
 if (VERIFY) app.get(`/zalo_verifier${VERIFY}.html`, (_req, res) => res.type('html').send(verifyHtml));
-app.get('/health', async (_req, res) => res.json({ ok: true, store: storeKind, zalo: await tokenStatus() }));
+app.get('/health', async (_req, res) => {
+  const p = personalState();
+  res.json({ ok: true, store: storeKind, zalo: await tokenStatus(), ca_nhan: { trang_thai: p.status, tai_khoan: p.account?.name || null } });
+});
+
+// ----- Nick Zalo cá nhân: trang quét QR (cần ADMIN_KEY) -----
+const esc = (x) => String(x ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const STATUS_VI = {
+  chua_dang_nhap: 'Chưa đăng nhập', cho_quet_qr: 'Đang chờ quét QR', da_quet: 'Đã quét, hãy bấm Đăng nhập trên điện thoại',
+  dang_ket_noi: 'Đang kết nối...', da_ket_noi: 'Đã kết nối ✅', bi_ngat: 'Bị ngắt kết nối', qr_het_han: 'QR hết hạn', tu_choi: 'Đã từ chối trên điện thoại',
+};
+app.get('/canhan', (req, res) => {
+  const key = req.query.key ?? '';
+  if (!safeEq(key, process.env.ADMIN_KEY)) return res.status(403).send('Sai ADMIN_KEY');
+  const s = personalState();
+  const k = encodeURIComponent(key);
+  const waiting = ['cho_quet_qr', 'da_quet', 'dang_ket_noi'].includes(s.status);
+  res.set('Cache-Control', 'no-store').type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+${waiting ? '<meta http-equiv="refresh" content="3">' : ''}<title>Zalo cá nhân - HADO agent</title>
+<style>body{font-family:system-ui,sans-serif;max-width:520px;margin:32px auto;padding:0 16px;line-height:1.5}a.btn{display:inline-block;padding:10px 16px;border-radius:8px;background:#0068ff;color:#fff;text-decoration:none;margin:4px 8px 4px 0}a.red{background:#c62828}img{width:260px;border:1px solid #ddd;border-radius:8px}.err{color:#c62828}</style></head><body>
+<h2>Nick Zalo cá nhân cho agent</h2>
+<p><b>Trạng thái:</b> ${esc(STATUS_VI[s.status] || s.status)}${s.account ? ` · <b>${esc(s.account.name || s.account.id)}</b>` : ''}</p>
+${s.scannedBy && s.status === 'da_quet' ? `<p>Đã quét bởi: ${esc(s.scannedBy)}</p>` : ''}
+${s.qrImage ? `<p>Mở app Zalo trên điện thoại (nick muốn kết nối) → biểu tượng QR → quét mã này → bấm <b>Đăng nhập</b>:</p><img alt="QR" src="data:image/png;base64,${s.qrImage}">` : ''}
+${s.lastError ? `<p class="err">${esc(s.lastError)}</p>` : ''}
+<p>${isLoggedIn() ? '' : `<a class="btn" href="/canhan/start?key=${k}">Tạo mã QR đăng nhập</a>`}
+${isLoggedIn() || s.status === 'bi_ngat' ? `<a class="btn red" href="/canhan/logout?key=${k}">Đăng xuất nick khỏi agent</a>` : ''}</p>
+<p style="color:#666;font-size:14px">Lưu ý: kết nối này dùng thư viện không chính thức. Không mở Zalo Web (chat.zalo.me) cùng nick, vì sẽ đá agent ra.</p>
+</body></html>`);
+});
+app.get('/canhan/start', (req, res) => {
+  if (!safeEq(req.query.key ?? '', process.env.ADMIN_KEY)) return res.status(403).send('Sai ADMIN_KEY');
+  startQRLogin();
+  setTimeout(() => res.redirect(`/canhan?key=${encodeURIComponent(req.query.key)}`), 2500);
+});
+app.get('/canhan/logout', async (req, res) => {
+  if (!safeEq(req.query.key ?? '', process.env.ADMIN_KEY)) return res.status(403).send('Sai ADMIN_KEY');
+  await logout();
+  res.redirect(`/canhan?key=${encodeURIComponent(req.query.key)}`);
+});
 
 // ----- Cấp quyền OA (chỉ chủ OA dùng, cần ADMIN_KEY) -----
 app.get('/oauth/start', (req, res) => {
@@ -65,6 +106,7 @@ app.all('/mcp/:secret', express.json({ limit: '1mb' }), async (req, res) => {
   }
   const server = new McpServer({ name: 'hado-zalo-oa', version: '1.0.0' });
   registerTools(server);
+  registerPersonalTools(server);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on('close', () => { transport.close(); server.close(); });
   try {
@@ -83,4 +125,14 @@ app.listen(port, () => {
   console.log(`- Callback cần khai báo trên Zalo: ${REDIRECT}`);
   console.log(`- Webhook URL: ${BASE}/webhook`);
   console.log(`- URL connector cho Claude: ${BASE}/mcp/<MCP_SECRET>`);
+  console.log(`- Nick Zalo cá nhân (quét QR): ${BASE}/canhan?key=<ADMIN_KEY>`);
+  restoreSession().then((ok) => console.log(ok ? 'Đã khôi phục phiên nick Zalo cá nhân' : 'Chưa có phiên nick Zalo cá nhân'));
 });
+
+// Gói Render Free ngủ sau 15 phút không có request, làm đứt kết nối nhận tin.
+// Khi nick cá nhân đang kết nối, tự gọi /health mỗi 10 phút để server luôn thức.
+if (String(process.env.KEEP_ALIVE ?? 'true') !== 'false') {
+  setInterval(() => {
+    if (isLoggedIn()) fetch(`${BASE}/health`).catch(() => {});
+  }, 10 * 60 * 1000).unref();
+}
