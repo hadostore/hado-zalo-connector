@@ -6,7 +6,7 @@ import { getJSON, setJSON, delKey, pushList, getList } from './store.js';
 
 const CREDS_KEY = 'personal:creds';
 const MSGS_KEY = 'personal:msgs';
-const MAX_MSGS = 2000;
+const MAX_MSGS = 5000;
 
 const state = {
   status: 'chua_dang_nhap', // chua_dang_nhap | cho_quet_qr | da_quet | dang_ket_noi | da_ket_noi | bi_ngat
@@ -62,9 +62,35 @@ async function saveMessage(m) {
   const n = normalize(m);
   if (!n.id || seen.has(n.id)) return;
   seen.add(n.id);
-  if (seen.size > 5000) seen.delete(seen.values().next().value);
+  if (seen.size > 8000) seen.delete(seen.values().next().value);
   await pushList(MSGS_KEY, n, MAX_MSGS).catch((e) => console.error('Lưu tin lỗi:', e.message));
 }
+
+// ----- Tải lùi lịch sử: xin Zalo từng trang tin cũ hơn tới khi hết hoặc đủ số trang -----
+const BACKFILL_MAX_PAGES = Number(process.env.ZCA_BACKFILL_PAGES || 40);
+const backfill = { [ThreadType.User]: { pages: 0, lastId: null, total: 0, done: false }, [ThreadType.Group]: { pages: 0, lastId: null, total: 0, done: false } };
+export function startBackfill() {
+  for (const t of [ThreadType.User, ThreadType.Group]) {
+    Object.assign(backfill[t], { pages: 0, lastId: null, total: 0, done: false });
+    try { listener?.requestOldMessages(t); } catch {}
+  }
+}
+function continueBackfill(list, type) {
+  const b = backfill[type];
+  if (!b || b.done) return;
+  b.pages++;
+  b.total += list.length;
+  if (!list.length) { b.done = true; return; }
+  let oldest = list[0];
+  for (const m of list) if (Number(m.data?.ts) < Number(oldest.data?.ts)) oldest = m;
+  const id = String(oldest.data?.msgId ?? '');
+  if (!id || id === b.lastId || b.pages >= BACKFILL_MAX_PAGES) { b.done = true; return; }
+  b.lastId = id;
+  setTimeout(() => { try { listener?.requestOldMessages(type, id); } catch { b.done = true; } }, 1500);
+}
+export const backfillStatus = () => ({
+  ca_nhan: { ...backfill[ThreadType.User] }, nhom: { ...backfill[ThreadType.Group] }, toi_da_trang: BACKFILL_MAX_PAGES,
+});
 
 // ----- Kết nối -----
 function attachListener() {
@@ -74,11 +100,14 @@ function attachListener() {
     state.status = 'da_ket_noi';
     state.since = new Date().toISOString();
     state.lastError = null;
-    // Lấy lại tin gần đây (bù tin nhận được lúc server ngủ/khởi động lại).
-    try { listener.requestOldMessages(ThreadType.User); listener.requestOldMessages(ThreadType.Group); } catch {}
+    // Lấy lại tin gần đây (bù tin nhận được lúc server ngủ/khởi động lại), rồi tải lùi nhiều trang.
+    startBackfill();
   });
   listener.on('message', (m) => { saveMessage(m); });
-  listener.on('old_messages', (list) => { for (const m of list) saveMessage(m); });
+  listener.on('old_messages', (list, type) => {
+    for (const m of list) saveMessage(m);
+    continueBackfill(list, type);
+  });
   listener.on('disconnected', (code, reason) => { console.log('[zca] disconnected', code, reason); state.status = 'dang_ket_noi_lai'; });
   listener.on('closed', (code, reason) => {
     console.log('[zca] closed', code, reason);
@@ -241,6 +270,30 @@ export async function userInfo(userId) {
   const p = r?.changed_profiles?.[userId] || r?.changed_profiles?.[`${userId}_0`] || Object.values(r?.changed_profiles || {})[0];
   if (!p) return r;
   return { user_id: userId, ten: p.displayName || p.zaloName, ten_zalo: p.zaloName, gioi_tinh: p.gender, sdt: p.phoneNumber || null, anh: p.avatar };
+}
+
+let friendsCache = null;
+export async function contacts({ refresh = false } = {}) {
+  if (!friendsCache || refresh) {
+    const all = [];
+    for (let page = 1; page <= 20; page++) {
+      const r = await requireApi().getAllFriends(200, page);
+      const list = Array.isArray(r) ? r : (r?.friends || r?.data || []);
+      all.push(...list);
+      if (list.length < 200) break;
+    }
+    friendsCache = all.map((u) => ({ user_id: String(u.userId), ten: u.displayName || u.zaloName, ten_zalo: u.zaloName, sdt: u.phoneNumber || null }));
+  }
+  return friendsCache;
+}
+
+export async function labels() {
+  const r = await requireApi().getLabels();
+  const names = new Map((friendsCache || []).map((f) => [f.user_id, f.ten]));
+  return (r?.labelData || []).map((l) => ({
+    nhan: l.text, so_hoi_thoai: l.conversations?.length || 0,
+    hoi_thoai: (l.conversations || []).map((id) => ({ thread_id: String(id).replace(/^g/, ''), la_nhom: String(id).startsWith('g'), ten: names.get(String(id)) || null })),
+  }));
 }
 
 export async function groupHistory(groupId, count = 30) {

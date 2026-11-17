@@ -1,6 +1,6 @@
 // Tool MCP cho chế độ nick Zalo cá nhân (zca-js).
 import { z } from 'zod';
-import { personalState, threadSummaries, threadMessages, recentMessages, userInfo, groupHistory, sendText } from './personal.js';
+import { personalState, threadSummaries, threadMessages, recentMessages, userInfo, groupHistory, sendText, contacts, labels, startBackfill, backfillStatus, isLoggedIn } from './personal.js';
 
 const SEND_ENABLED = String(process.env.ZALO_SEND_ENABLED).toLowerCase() === 'true';
 const READ = { readOnlyHint: true, openWorldHint: true };
@@ -19,7 +19,7 @@ export function registerPersonalTools(server) {
     annotations: READ,
   }, wrap(async () => {
     const s = personalState();
-    return { trang_thai: s.status, tai_khoan: s.account, ket_noi_tu: s.since, loi_gan_nhat: s.lastError, gui_tin_that: SEND_ENABLED };
+    return { trang_thai: s.status, tai_khoan: s.account, ket_noi_tu: s.since, loi_gan_nhat: s.lastError, gui_tin_that: SEND_ENABLED, tai_lich_su: backfillStatus() };
   }));
 
   server.registerTool('zcn_danh_sach_hoi_thoai', {
@@ -51,7 +51,7 @@ export function registerPersonalTools(server) {
     },
     annotations: READ,
   }, wrap(async ({ limit, chi_tin_cua_khach }) => {
-    let list = await recentMessages(chi_tin_cua_khach ? 2000 : limit);
+    let list = await recentMessages(chi_tin_cua_khach ? 5000 : limit);
     if (chi_tin_cua_khach) list = list.filter((m) => !m.tu_minh);
     return list.slice(0, limit);
   }));
@@ -69,6 +69,35 @@ export function registerPersonalTools(server) {
     inputSchema: { group_id: z.string(), count: z.number().int().min(1).max(50).default(30) },
     annotations: READ,
   }, wrap(({ group_id, count }) => groupHistory(group_id, count)));
+
+  server.registerTool('zcn_danh_ba', {
+    title: 'Danh bạ Zalo cá nhân',
+    description: 'Danh sách bạn bè/khách trong danh bạ nick Zalo (user_id, tên, SĐT nếu có). Có thể lọc theo từ khoá tên hoặc SĐT.',
+    inputSchema: { tu_khoa: z.string().optional(), limit: z.number().int().min(1).max(500).default(100), lam_moi: z.boolean().default(false) },
+    annotations: READ,
+  }, wrap(async ({ tu_khoa, limit, lam_moi }) => {
+    let list = await contacts({ refresh: lam_moi });
+    if (tu_khoa) { const k = tu_khoa.toLowerCase(); list = list.filter((c) => `${c.ten} ${c.ten_zalo} ${c.sdt || ''}`.toLowerCase().includes(k)); }
+    return { tong: list.length, danh_sach: list.slice(0, limit) };
+  }));
+
+  server.registerTool('zcn_nhan_khach', {
+    title: 'Nhãn phân loại khách (zBusiness)',
+    description: 'Các nhãn shop đã gắn trên Zalo (vd: Đã mua, Khách sỉ) và hội thoại nào đang mang từng nhãn. Gọi zcn_danh_ba trước để có tên khách.',
+    inputSchema: {},
+    annotations: READ,
+  }, wrap(() => labels()));
+
+  server.registerTool('zcn_tai_lich_su', {
+    title: 'Tải lùi lịch sử tin nhắn',
+    description: 'Xin Zalo gửi lại các tin nhắn cũ hơn (tải lùi từng trang) để bổ sung lịch sử cho agent. Chạy nền, xem tiến độ bằng zcn_trang_thai.',
+    inputSchema: {},
+    annotations: READ,
+  }, wrap(async () => {
+    if (!isLoggedIn()) throw new Error('Nick chưa kết nối, cần quét QR trước.');
+    startBackfill();
+    return { da_bat_dau: true, ghi_chu: 'Đang tải lùi, 1-2 phút sau gọi zcn_trang_thai để xem đã tải bao nhiêu tin.' };
+  }));
 
   server.registerTool('zcn_gui_tin', {
     title: 'Gửi tin Zalo cá nhân',
