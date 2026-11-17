@@ -70,6 +70,7 @@ async function saveMessage(m) {
 function attachListener() {
   listener = api.listener;
   listener.on('connected', () => {
+    console.log('[zca] listener connected');
     state.status = 'da_ket_noi';
     state.since = new Date().toISOString();
     state.lastError = null;
@@ -78,8 +79,9 @@ function attachListener() {
   });
   listener.on('message', (m) => { saveMessage(m); });
   listener.on('old_messages', (list) => { for (const m of list) saveMessage(m); });
-  listener.on('disconnected', () => { state.status = 'dang_ket_noi_lai'; });
+  listener.on('disconnected', (code, reason) => { console.log('[zca] disconnected', code, reason); state.status = 'dang_ket_noi_lai'; });
   listener.on('closed', (code, reason) => {
+    console.log('[zca] closed', code, reason);
     state.status = 'bi_ngat';
     const kicked = code === 3000 || code === 3003;
     state.lastError = kicked
@@ -87,7 +89,7 @@ function attachListener() {
       : `Kết nối bị đóng (${code}) ${reason || ''}, đang tự kết nối lại...`.trim();
     if (!kicked) scheduleReconnect();
   });
-  listener.on('error', (e) => { state.lastError = String(e?.message || e); });
+  listener.on('error', (e) => { console.log('[zca] ws error', e?.message || e); state.lastError = String(e?.message || e); });
   listener.start({ retryOnClose: true });
 }
 
@@ -101,7 +103,7 @@ async function afterLogin(zaloApi) {
   attachListener();
 }
 
-const newZalo = () => new Zalo({ selfListen: true, checkUpdate: false, logging: false });
+const newZalo = () => new Zalo({ selfListen: true, checkUpdate: false, logging: String(process.env.ZCA_LOGGING) === 'true' });
 
 export function startQRLogin() {
   if (loginInFlight) return loginInFlight;
@@ -130,9 +132,11 @@ export function startQRLogin() {
         }
       });
       if (!zaloApi) throw new Error('Đăng nhập QR không thành công');
+      console.log('[zca] QR login ok');
       state.status = 'dang_ket_noi';
       await afterLogin(zaloApi);
     } catch (e) {
+      console.log('[zca] QR login failed', e?.message || e);
       if (state.status !== 'qr_het_han' && state.status !== 'tu_choi') state.status = 'chua_dang_nhap';
       state.lastError = String(e?.message || e);
     } finally {
@@ -151,6 +155,7 @@ export async function restoreSession() {
     await afterLogin(await newZalo().login(creds));
     return true;
   } catch (e) {
+    console.log('[zca] restore failed', e?.message || e);
     state.status = state.account ? 'bi_ngat' : 'chua_dang_nhap';
     state.lastError = 'Đăng nhập lại bằng phiên đã lưu thất bại (nếu lỗi kéo dài, hãy quét QR lại): ' + (e?.message || e);
     return false;
