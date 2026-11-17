@@ -1,0 +1,16 @@
+{
+  "name": "hado-zalo-oa-mcp",
+  "version": "1.0.0",
+  "description": "MCP server (custom connector cho Claude) ket noi Zalo Official Account API cua HADO STORE",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "express": "^4.21.2",
+    "zod": "^3.25.76"
+  }
+}
