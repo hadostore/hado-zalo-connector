@@ -78,11 +78,14 @@ function attachListener() {
   });
   listener.on('message', (m) => { saveMessage(m); });
   listener.on('old_messages', (list) => { for (const m of list) saveMessage(m); });
+  listener.on('disconnected', () => { state.status = 'dang_ket_noi_lai'; });
   listener.on('closed', (code, reason) => {
     state.status = 'bi_ngat';
-    state.lastError = code === 3000
-      ? 'Nick đang mở Zalo Web ở nơi khác (chat.zalo.me) nên kết nối của agent bị ngắt. Đóng Zalo Web rồi khởi động lại.'
-      : `Kết nối bị đóng (${code}) ${reason || ''}`.trim();
+    const kicked = code === 3000 || code === 3003;
+    state.lastError = kicked
+      ? 'Nick đang mở Zalo Web ở nơi khác (chat.zalo.me) nên kết nối của agent bị ngắt. Đóng Zalo Web rồi bấm Kết nối lại.'
+      : `Kết nối bị đóng (${code}) ${reason || ''}, đang tự kết nối lại...`.trim();
+    if (!kicked) scheduleReconnect();
   });
   listener.on('error', (e) => { state.lastError = String(e?.message || e); });
   listener.start({ retryOnClose: true });
@@ -148,11 +151,37 @@ export async function restoreSession() {
     await afterLogin(await newZalo().login(creds));
     return true;
   } catch (e) {
-    state.status = 'chua_dang_nhap';
-    state.lastError = 'Phiên đăng nhập cũ hết hạn, cần quét QR lại: ' + (e?.message || e);
+    state.status = state.account ? 'bi_ngat' : 'chua_dang_nhap';
+    state.lastError = 'Đăng nhập lại bằng phiên đã lưu thất bại (nếu lỗi kéo dài, hãy quét QR lại): ' + (e?.message || e);
     return false;
   }
 }
+
+// Tự kết nối lại khi rớt mạng: đăng nhập lại bằng phiên đã lưu, giãn dần 30s -> 10 phút.
+let reconnectTimer = null;
+let reconnectDelay = 30_000;
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+    stopListener();
+    const ok = await restoreSession();
+    if (ok) { reconnectDelay = 30_000; return; }
+    reconnectDelay = Math.min(reconnectDelay * 2, 600_000);
+    scheduleReconnect(); // vẫn lỗi: thử lại, giãn dần tới 10 phút/lần
+    state.status = 'bi_ngat';
+  }, reconnectDelay);
+}
+export async function reconnectNow() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  stopListener();
+  reconnectDelay = 30_000;
+  return restoreSession();
+}
+// Lưới an toàn: 5 phút kiểm tra 1 lần, nếu đang bị ngắt (không phải do Zalo Web) thì nối lại.
+setInterval(() => {
+  if (state.status === 'bi_ngat' && state.account && !state.lastError?.includes('Zalo Web')) scheduleReconnect();
+}, 5 * 60_000).unref();
 
 function stopListener() {
   try { listener?.stop(); } catch {}
@@ -161,6 +190,7 @@ function stopListener() {
 }
 
 export async function logout() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopListener();
   await delKey(CREDS_KEY);
   Object.assign(state, { status: 'chua_dang_nhap', qrImage: null, account: null, scannedBy: null, lastError: null, since: null });
@@ -168,6 +198,7 @@ export async function logout() {
 
 export const personalState = () => ({ ...state });
 export const isLoggedIn = () => Boolean(api);
+export const hasAccount = () => Boolean(state.account);
 
 function requireApi() {
   if (!api) throw new Error(`Nick Zalo cá nhân chưa kết nối (trạng thái: ${state.status}). Chủ shop cần mở trang /canhan?key=<ADMIN_KEY> và quét QR.`);
