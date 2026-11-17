@@ -64,6 +64,17 @@ async function saveMessage(m) {
   seen.add(n.id);
   if (seen.size > 8000) seen.delete(seen.values().next().value);
   await pushList(MSGS_KEY, n, MAX_MSGS).catch((e) => console.error('Lưu tin lỗi:', e.message));
+  if (messageHook && !m.__old) { try { messageHook(n); } catch (e) { console.error('[agent] hook lỗi', e.message); } }
+}
+let messageHook = null;
+export function setMessageHook(fn) { messageHook = fn; }
+const groupNames = new Map();
+export async function groupName(groupId) {
+  if (groupNames.has(groupId)) return groupNames.get(groupId);
+  const info = await requireApi().getGroupInfo(String(groupId));
+  const name = info?.gridInfoMap?.[groupId]?.name || '';
+  groupNames.set(groupId, name);
+  return name;
 }
 
 // ----- Tải lùi lịch sử: xin Zalo từng trang tin cũ hơn tới khi hết hoặc đủ số trang -----
@@ -105,7 +116,7 @@ function attachListener() {
   });
   listener.on('message', (m) => { saveMessage(m); });
   listener.on('old_messages', (list, type) => {
-    for (const m of list) saveMessage(m);
+    for (const m of list) { m.__old = true; saveMessage(m); }
     continueBackfill(list, type);
   });
   listener.on('disconnected', (code, reason) => { console.log('[zca] disconnected', code, reason); state.status = 'dang_ket_noi_lai'; });

@@ -11,6 +11,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.9.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "express": "^4.21.2",
     "zca-js": "^2.3.0",
