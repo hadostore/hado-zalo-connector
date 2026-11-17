@@ -130,7 +130,22 @@ async function afterLogin(zaloApi) {
   state.account = { id: String(id), name };
   state.qrImage = null;
   attachListener();
+  saveFreshCreds();
 }
+
+// Lưu lại cookie mới nhất sau khi đăng nhập (và 30 phút/lần) để server khởi động lại vẫn vào lại được, không cần quét QR.
+async function saveFreshCreds() {
+  try {
+    if (!api) return;
+    const ctx = api.getContext();
+    const jar = api.getCookie();
+    const cookie = jar && typeof jar.toJSON === 'function' ? jar.toJSON().cookies : jar;
+    if (!cookie || !ctx?.imei) return;
+    await setJSON(CREDS_KEY, encrypt({ cookie, imei: ctx.imei, userAgent: ctx.userAgent }));
+    console.log('[zca] creds refreshed');
+  } catch (e) { console.log('[zca] creds refresh failed', e?.message || e); }
+}
+setInterval(() => { if (state.status === 'da_ket_noi') saveFreshCreds(); }, 30 * 60_000).unref?.();
 
 const newZalo = () => new Zalo({ selfListen: true, checkUpdate: false, logging: String(process.env.ZCA_LOGGING) === 'true' });
 
